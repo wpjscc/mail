@@ -4,6 +4,9 @@ namespace Kodus\Mail\SMTP;
 
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
+use React\EventLoop\Loop;
+use function React\Async\await;
+
 
 class SMTPClient implements LoggerAwareInterface
 {
@@ -32,6 +35,14 @@ class SMTPClient implements LoggerAwareInterface
      */
     protected $last_result;
 
+
+    protected $deferred = null;
+
+    /**
+     * @var \Closure
+     */
+    private \Closure $readListener;
+
     /**
      * @param resource $socket SMTP socket
      *
@@ -40,6 +51,36 @@ class SMTPClient implements LoggerAwareInterface
     public function __construct($socket)
     {
         $this->socket = $socket;
+        $this->deferred = new \React\Promise\Deferred();
+
+        $this->readListener = function (): void {
+            while (($line = fgets($this->socket, 4096)) !== false) {
+                $this->log("R: {$line}");
+                $this->last_result = $line;
+
+                // Final line of a reply uses "<code><SP>"; continuation lines use "<code>-".
+                if (preg_match('/^\d\d\d /', $line) === 1) {
+                    if ($this->deferred !== null) {
+                        $deferred = $this->deferred;
+                        $this->deferred = null;
+                        $deferred->resolve($line);
+                    }
+
+                    break;
+                }
+            }
+
+            // Non-blocking `fgets` returns false when no full line is buffered yet; only treat as closed if EOF.
+            if ($this->deferred !== null && feof($this->socket)) {
+                $deferred = $this->deferred;
+                $this->deferred = null;
+                $deferred->reject(new SMTPException(
+                    "Connection closed while awaiting response\nS: {$this->last_command}\nR: {$this->last_result}"
+                ));
+            }
+        };
+
+        Loop::addReadStream($this->socket, $this->readListener);
 
         $code = $this->readCode();
 
@@ -54,6 +95,8 @@ class SMTPClient implements LoggerAwareInterface
     public function __destruct()
     {
         $this->sendCommand("QUIT", "221");
+
+        Loop::removeReadStream($this->socket);
 
         fclose($this->socket);
     }
@@ -91,8 +134,17 @@ class SMTPClient implements LoggerAwareInterface
     {
         $this->sendCommand("STARTTLS", "220");
 
-        if (! stream_socket_enable_crypto($this->socket, true, $crypto_method)) {
-            throw new SMTPException("STARTTLS failed to enable crypto-method: {$crypto_method}");
+        // Avoid treating TLS handshake bytes as SMTP lines; non-blocking sockets often need blocking here.
+        Loop::removeReadStream($this->socket);
+        stream_set_blocking($this->socket, true);
+
+        try {
+            if (! stream_socket_enable_crypto($this->socket, true, $crypto_method)) {
+                throw new SMTPException("STARTTLS failed to enable crypto-method: {$crypto_method}");
+            }
+        } finally {
+            stream_set_blocking($this->socket, false);
+            Loop::addReadStream($this->socket, $this->readListener);
         }
     }
 
@@ -108,11 +160,13 @@ class SMTPClient implements LoggerAwareInterface
      */
     public function sendCommand(string $command, ?string $expected_code = null)
     {
+
         $this->last_command = $command;
 
         $this->log("S: {$command}");
 
         fwrite($this->socket, "{$command}{$this->eol}");
+        $this->deferred = new \React\Promise\Deferred();
 
         $code = $this->readCode();
 
@@ -187,17 +241,23 @@ class SMTPClient implements LoggerAwareInterface
      */
     protected function readCode(): string
     {
-        while ($line = fgets($this->socket, 4096)) {
-            $this->log("R: {$line}");
+        $this->last_result = '';
 
-            $this->last_result = $line;
-
-            if (preg_match('/^\d\d\d /', $line) === 1) {
-                return substr($line, 0, 3);
-            }
+        try {
+            $line = await($this->deferred->promise());
+        } catch (\Throwable $e) {
+            throw new SMTPException(
+                "SMTP read failed\nS: {$this->last_command}\nR: {$this->last_result}",
+                0,
+                $e
+            );
         }
 
-        throw new SMTPException("unexpected response\nS: {$this->last_command}\nR: {$this->last_result}");
+        if (! is_string($line) || preg_match('/^\d\d\d /', $line) !== 1) {
+            throw new SMTPException("unexpected response\nS: {$this->last_command}\nR: {$this->last_result}");
+        }
+
+        return substr($line, 0, 3);
     }
 
     /**

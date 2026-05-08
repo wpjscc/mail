@@ -1,5 +1,5 @@
 {
-    "name": "kodus/mail",
+    "name": "wpjscc/mail",
     "description": "Simple, modern library of services for sending UTF-8 e-mail",
     "authors": [
         {
@@ -13,9 +13,12 @@
     "prefer-stable": true,
     "require": {
         "php": ">= 8.0",
-        "psr/log": "^1 || ^2 || ^3"
+        "psr/log": "^1 || ^2 || ^3",
+        "react/socket": "^1.17",
+        "react/async": "^4.3"
     },
     "require-dev": {
+        "monolog/monolog": "^3.10",
         "codeception/codeception": "^5",
         "codeception/module-asserts": "^3.0"
     },

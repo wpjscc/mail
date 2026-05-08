@@ -88,6 +88,26 @@ a [PSR-3 Logger](http://www.php-fig.org/psr/psr-3/) into `SMTPClient` via `SMTPC
 this may be useful if you have connection issues, as it will write a `debug`-level entry for every
 SMTP command sent, and every response received.
 
+### `examples/send.php`
+
+The repository includes a small runnable script that sends two sample messages (plain text and
+HTML) through QQ Mail’s SMTP endpoint (`smtp.qq.com`, port `587`, `STARTTLS` via `SecureSocketConnector`).
+It uses [React Async](https://github.com/reactphp/async) because the SMTP client integrates with the React event loop.
+
+From the project root, after `composer install`:
+
+```bash
+php examples/send.php <account@domain> <password> <to@address>
+```
+
+- **account**: SMTP login address (also used as the `From` address in the sample messages).
+- **password**: SMTP password (for QQ Mail this is usually an application-specific authorization code, not your normal login password).
+- **to@address**: Recipient address.
+
+The EHLO client domain is derived from the part of the account address after `@`. Adjust host, port,
+or provider in the script if you use another SMTP server.
+
+The script calls `SMTPMailService::disconnect()` after sending so the underlying client closes with `QUIT`.
 
 ## Message Logging
 

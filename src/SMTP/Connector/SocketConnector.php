@@ -36,6 +36,8 @@ class SocketConnector implements SMTPConnector
             throw new SMTPException("Could not open SMTP Port.");
         }
 
+        stream_set_blocking($socket, false);
+
         $client = new SMTPClient($socket);
 
         $client->sendEHLO($client_domain);
